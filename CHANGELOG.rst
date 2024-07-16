@@ -41,6 +41,7 @@ Change Log
 - [CHANGED] considering trafo controller and improve implementation for other (bus element) controller at grid_equivalent creation
 - [FIXED] deprecation of matplotlib.cm.get_cmap(name) -> matplotlib.colormaps[name]
 - [FIXED] merge_nets failing if net2 has custom DataFrame that is not present in net1
+- [FIXED] fixed some small bugs in the CGMES converter and improved its speed
 
 [2.14.7] - 2024-06-14
 -------------------------------
