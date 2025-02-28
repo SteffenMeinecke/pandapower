@@ -39,8 +39,6 @@ def from_ppc(ppc, f_hz=50, validate_conversion=False, **kwargs):
         **validate_conversion** (bool) - If True, validate_from_ppc is run after conversion. For running the validation, the ppc must already contain the pypower powerflow results or pypower must be installed, by default False
 
         **kwargs** (dict) - keyword arguments for:
-                            - validate_from_ppc if validate_conversion is True
-
                             - tap_side
 
                             - check_costs is passed as "check" to create_pwl_costs() and create_poly_costs()
