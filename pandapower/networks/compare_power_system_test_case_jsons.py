@@ -50,6 +50,19 @@ def compare_json_folders(folder1, folder2):
                                                 net2[et][net1[et].columns.difference({"name"})])
                     print(f"{et}: {df_eq}")
             is_eq = pp.nets_equal(net1, net2, check_only_results=True)
+            if not is_eq:
+                if not net1.converged:
+                    try:
+                        pp.runpp(net1, trafo_model="pi")
+                    except pp.LoadflowNotConverged:
+                        pass
+                if not net2.converged:
+                    try:
+                        pp.runpp(net2, trafo_model="pi")
+                    except pp.LoadflowNotConverged:
+                        pass
+                is_eq = pp.nets_equal(net1, net2, check_only_results=True)
+
             if is_eq:
                 eq.append(net_name)
             else:
@@ -69,4 +82,5 @@ def defaulting_folder_integers(folder):
 
 
 if __name__ == "__main__":
-    compare_json_folders(1, os.path.join(home, "desktop", "develop"))
+    compare_json_folders(1, os.path.join(home, "desktop", "v2.14.11"))
+    # compare_json_folders(1, os.path.join(home, "desktop", "develop"))
