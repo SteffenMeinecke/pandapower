@@ -11,6 +11,7 @@ from pandapower.auxiliary import LoadflowNotConverged
 from pandapower.file_io import to_json
 from pandapower.run import runpp
 import pandapower.networks as pn
+from pandapower.pypower.idx_brch import BR_R, BR_X
 try:
     import pandaplan.core.pplog as logging
 except ImportError:
@@ -42,12 +43,10 @@ def create_power_system_test_case_jsons(output_folder=None):
         # --- load the net
         ppc = load_ppc(row.name, input_data_folders[row.folder_no])
 
-        ### TODO:
-        # line r & x sind anders
-
         # --- correct, convert and adjust the net
-        correct_or_adapt_input_data(ppc, row.name)
+        correct_or_adapt_input_data1(ppc, row.name)
         net = from_ppc(ppc, f_hz=row.f_hz)
+        correct_or_adapt_input_data2(net, ppc, row.name)
         try_to_take_bus_geo_data_from_existing(net, row.name)
         try_to_provide_pf_results(net, row.name)
 
@@ -103,7 +102,7 @@ iceland;50;2
     return table, input_data_folders
 
 
-def correct_or_adapt_input_data(ppc, net_name):
+def correct_or_adapt_input_data1(ppc, net_name):
     """In the original data of some power system test cases inappropriate data is included. This
     function corrects these at the stage of ppc format, i.e. before conversion by from_ppc().
     """
@@ -117,8 +116,8 @@ def correct_or_adapt_input_data(ppc, net_name):
         PL_max = np.max(ppc["bus"][load_rows, 2])
         PL_min = np.min(ppc["bus"][load_rows, 2])
         if PL_min > 0.5 and PL_max > 50:
-            logger.info("Powers in 'case33bw' are given in MW/Mvar, however, these are corrected "
-                        "to kW/kvar according to the original paper.")
+            logger.debug("Powers in 'case33bw' are given in MW/Mvar and corrected there afterwards."
+                         "Here, the correction to kW/kvar is needed und done.")
             ppc["bus"][:, [2, 3]] *= 1e-3
         elif PL_min <= 0.5 and PL_max > 50:
             raise ValueError("In 'case33bw', the power values of the loads are not as expected.")
@@ -187,6 +186,22 @@ def _choose_slack_buses_with_connected_gens(ppc, net_name, new_slack_buses):
     # --- change original slack buses to new_slack_buses
     ppc["bus"][idx_original_slack_buses, 1] = 2
     ppc["bus"][idx_new_slack_buses, 1] = 3  # add missing slack bus with gen
+
+
+def correct_or_adapt_input_data2(net, ppc, net_name):
+    if net_name == "case33bw":
+        # in ppc, the r anx values are given in ohm, not p.u.
+        # simplified code <- it is known that all branches are converted to lines
+        if (len(net.trafo) + len(net.trafo3w) + len(net.impedance)) > 0:
+            raise NotImplementedError("The code is simplified for the case that all branches are "
+                                      "converted to lines.")
+        if not np.allclose(net.line.length_km, 1):
+            raise NotImplementedError("The code is simplified for the case that all lines have the "
+                                      "length 1 km.")
+        net.line["r_ohm_per_km"] = ppc["branch"][:, BR_R]
+        net.line["x_ohm_per_km"] = ppc["branch"][:, BR_X]
+        logger.debug("r, x in 'case33bw' contain values in ohm and are corrected afterwards. "
+                     "Here, the conversion from p.u. to ohm within from_ppc() must and is reversed.")
 
 
 def try_to_take_bus_geo_data_from_existing(net, net_name):
