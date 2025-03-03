@@ -42,7 +42,7 @@ def from_ppc(ppc, f_hz=50, validate_conversion=False, **kwargs):
                             - tap_side
 
                             - check_costs is passed as "check" to create_pwl_costs() and create_poly_costs()
-                            
+
                             - branch_g_name: name of branch_g column if it exists in ppc. if not given, branch G is set to 0
 
     OUTPUT:
@@ -201,7 +201,7 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
     # --- general_parameters
     baseMVA = ppc['baseMVA']  # MVA
     omega = pi * f_hz  # 1/s
-    MAX_VAL = 99999.
+    MAX_VAL = 99999. # MVA
 
     from_bus = _get_bus_pos(ppc, ppc['branch'][:, F_BUS].astype(np.int64))
     to_bus = _get_bus_pos(ppc, ppc['branch'][:, T_BUS].astype(np.int64))
@@ -213,22 +213,25 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
     bra_name = ppc.get("branch_name", ppc.get("bra_name", np.array([None]*n_bra)))
 
     # --- create line
-    Zni = ppc['bus'][to_bus, BASE_KV]**2/baseMVA  # ohm
-    max_i_ka = ppc['branch'][:, RATE_A]/ppc['bus'][to_bus, BASE_KV]/np.sqrt(3)
-    i_is_zero = np.isclose(max_i_ka, 0)
-    if np.any(i_is_zero):
-        max_i_ka[i_is_zero] = MAX_VAL
-        logger.debug("ppc branch rateA is zero -> Using MAX_VAL instead to calculate " +
-                     "maximum branch flow")
-    idx_line = create_lines_from_parameters(
-        net, from_buses=net.bus.index[from_bus[is_line]], to_buses=net.bus.index[to_bus[is_line]],
-        length_km=1, name=bra_name[is_line],
-        r_ohm_per_km=(ppc['branch'][is_line, BR_R]*Zni[is_line]),
-        x_ohm_per_km=(ppc['branch'][is_line, BR_X]*Zni[is_line]),
-        c_nf_per_km=(ppc['branch'][is_line, BR_B]/Zni[is_line]/omega*1e9/2),
-        g_us_per_km=(br_g[is_line]/Zni[is_line]*1e6/2),
-        max_i_ka=max_i_ka[is_line], type='ol', max_loading_percent=100,
-        in_service=ppc['branch'][is_line, BR_STATUS].astype(bool))
+    if np.any(is_line):
+        Zni = ppc['bus'][to_bus, BASE_KV]**2/baseMVA  # ohm
+        max_i_ka = ppc['branch'][:, RATE_A]/ppc['bus'][to_bus, BASE_KV]/np.sqrt(3)
+        i_is_zero = np.isclose(max_i_ka, 0)
+        if np.any(i_is_zero):
+            max_i_ka[i_is_zero] = MAX_VAL / from_vn_kv[i_is_zero]
+            logger.debug("ppc branch rateA is zero -> Using MAX_VAL instead to calculate " +
+                        "maximum branch flow")
+        idx_line = create_lines_from_parameters(
+            net, from_buses=net.bus.index[from_bus[is_line]], to_buses=net.bus.index[to_bus[is_line]],
+            length_km=1, name=bra_name[is_line],
+            r_ohm_per_km=(ppc['branch'][is_line, BR_R]*Zni[is_line]),
+            x_ohm_per_km=(ppc['branch'][is_line, BR_X]*Zni[is_line]),
+            c_nf_per_km=(ppc['branch'][is_line, BR_B]/Zni[is_line]/omega*1e9/2),
+            g_us_per_km=(br_g[is_line]/Zni[is_line]*1e6/2),
+            max_i_ka=max_i_ka[is_line], type='ol', max_loading_percent=100,
+            in_service=ppc['branch'][is_line, BR_STATUS].astype(bool))
+    else:
+        idx_line = np.array([], dtype=np.int64)
 
     # --- create transformer
     if np.any(is_trafo):
@@ -277,7 +280,7 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
                 f'(hv_bus, lv_bus)=({hv_bus[is_neg_i0_percent]}, {hv_bus[is_neg_i0_percent]}) '
                 'is positive.')
 
-        pfe_kw = br_g[is_trafo] * baseMVA * 1e3 
+        pfe_kw = br_g[is_trafo] * baseMVA * 1e3
         # pfe_kw = 0.
         vk_percent = np.sign(xk) * zk * sn * 100 / baseMVA
         vk_percent[~tap_side_is_hv] /= (1+ratio_1[~tap_side_is_hv])**2
@@ -296,47 +299,69 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
             tap_step_percent=tap_step_percent, tap_pos=np.sign(ratio_1),
             tap_side=tap_side, tap_neutral=0, tap_changer_type=tap_changer_type)
     else:
-        idx_trafo = []
+        idx_trafo = np.array([], dtype=np.int64)
     # unused data from ppc: rateB, rateC
-    
+
+    # --- create impedance
     if np.any(is_impedance):
         fb = net.bus.index[from_bus[is_impedance]]
         tb = net.bus.index[to_bus[is_impedance]]
         sn_mva = ppc['branch'][is_impedance, RATE_A]
+        sn = ppc['branch'][is_impedance, RATE_A]
         sn_is_zero = np.isclose(sn_mva, 0)
         if np.any(sn_is_zero):
             sn[sn_is_zero] = MAX_VAL
-            logger.debug("ppc branch rateA is zero -> Using MAX_VAL instead to calculate " +
-                            "apparent power")
+            logger.debug("ppc branch rateA is zero for at least some impedances -> "
+                         "baseMVA and rateA is ignored and MAXValue used for sn_mva.")
         # the impedances in ppc[branch] refer to the net.sn_mva and the impedances in net.impedance
         # refer to net.impedance.sn_mva!
-        rft_pu = ppc['branch'][is_impedance, BR_R] / baseMVA * sn_mva
-        xft_pu = ppc['branch'][is_impedance, BR_X] / baseMVA * sn_mva
-        bf_pu = ppc['branch'][is_impedance, BR_B] * baseMVA / sn_mva / 2
-        gf_pu = br_g[is_impedance] * baseMVA / sn_mva / 2
-        r_asym_pu = br_r_asym[is_impedance] / baseMVA * sn_mva
-        x_asym_pu = br_x_asym[is_impedance] / baseMVA * sn_mva
-        g_asym_pu = br_g_asym[is_impedance] * baseMVA / sn_mva / 2
-        b_asym_pu = br_b_asym[is_impedance] * baseMVA / sn_mva / 2
+        rft_pu = ppc['branch'][is_impedance, BR_R]
+        xft_pu = ppc['branch'][is_impedance, BR_X]
+        bf_pu = ppc['branch'][is_impedance, BR_B] / 2
+        gf_pu = br_g[is_impedance] / 2
+        r_asym_pu = br_r_asym[is_impedance]
+        x_asym_pu = br_x_asym[is_impedance]
+        b_asym_pu = br_b_asym[is_impedance] / 2
+        g_asym_pu = br_g_asym[is_impedance] / 2
+
+        if not np.any(sn_is_zero):
+            rft_pu[~sn_is_zero] *= sn_mva[~sn_is_zero] / baseMVA
+            xft_pu[~sn_is_zero] *= sn_mva[~sn_is_zero] / baseMVA
+            bf_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
+            gf_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
+            r_asym_pu[~sn_is_zero] *= sn_mva[~sn_is_zero] / baseMVA
+            x_asym_pu[~sn_is_zero] *= sn_mva[~sn_is_zero] / baseMVA
+            b_asym_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
+            g_asym_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
+        elif np.all(~sn_is_zero):
+            rft_pu *= sn_mva / baseMVA
+            xft_pu *= sn_mva / baseMVA
+            bf_pu *= baseMVA / sn_mva
+            gf_pu *= baseMVA / sn_mva
+            r_asym_pu *= sn_mva / baseMVA
+            x_asym_pu *= sn_mva / baseMVA
+            b_asym_pu *= baseMVA / sn_mva
+            g_asym_pu *= baseMVA / sn_mva
 
         # divide by 2 because in ppc[branch] it stands for the total Y of the branch,
         # and here we specify the "from" and "to" portions of Y separately
-        idx_impedance = create_impedances(net, from_buses=fb, to_buses=tb, rft_pu=rft_pu, 
-                                          xft_pu=xft_pu, rtf_pu=rft_pu+r_asym_pu, xtf_pu=xft_pu+x_asym_pu,
-                                          bf_pu=bf_pu, gf_pu=gf_pu, gt_pu=gf_pu+g_asym_pu,
-                                          bt_pu=bf_pu+b_asym_pu, sn_mva=sn_mva)
+        idx_impedance = create_impedances(
+            net, from_buses=fb, to_buses=tb, rft_pu=rft_pu,
+            xft_pu=xft_pu, rtf_pu=rft_pu+r_asym_pu, xtf_pu=xft_pu+x_asym_pu,
+            bf_pu=bf_pu, gf_pu=gf_pu, gt_pu=gf_pu+g_asym_pu,
+            bt_pu=bf_pu+b_asym_pu, sn_mva=sn)
     else:
-        idx_impedance = []
-    
+        idx_impedance = np.array([], dtype=np.int64)
+
     # branch_lookup: which branches are lines, and which ones are transformers
     branch_lookup = pd.DataFrame({"element": [-1] * n_bra, "element_type": [""] * n_bra})
     branch_lookup.loc[is_line, "element"] = idx_line
     branch_lookup.loc[is_line, "element_type"] = "line"
     branch_lookup.loc[is_trafo, "element"] = idx_trafo
     branch_lookup.loc[is_trafo, "element_type"] = "trafo"
-    branch_lookup["element"] = branch_lookup["element"].astype("float64")
     branch_lookup.loc[is_impedance, "element"] = idx_impedance
     branch_lookup.loc[is_impedance, "element_type"] = "impedance"
+    branch_lookup["element"] = branch_lookup["element"].astype("float64")
     return branch_lookup
 
 

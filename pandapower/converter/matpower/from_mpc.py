@@ -63,7 +63,7 @@ def from_mpc(mpc_file, f_hz=50, casename_mpc_file='mpc', validate_conversion=Fal
     if ending == ".mat":
         ppc = _mat2ppc(mpc_file, casename_mpc_file)
     elif ending == ".m":
-        ppc = _m2ppc(mpc_file, casename_mpc_file)
+        ppc = _m2ppc(mpc_file)
     net = from_ppc(ppc, f_hz=f_hz, validate_conversion=validate_conversion, **kwargs)
     if "mpc_additional_data" in ppc:
         if "_options" not in net:
@@ -92,7 +92,7 @@ def _mat2ppc(mpc_file, casename_mpc_file):
     return ppc
 
 
-def _m2ppc(mpc_file, casename_mpc_file):
+def _m2ppc(mpc_file):
     if not matpowercaseframes_imported:
         raise NotImplementedError(
             "matpowercaseframes is used to convert .m file. Please install that python "
