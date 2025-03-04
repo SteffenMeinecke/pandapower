@@ -15,6 +15,7 @@ Change Log
 - [CHANGED] updated PowerFactory to pandapower converter to export measurement reports and reflect changes in trafo/trafo3w tap changer logic
 - [ADDED] shunt_characteristic_spline table
 - [CHANGED] renamed characteristic table to trafo_characteristic_spline table and changed its structure so that there is one row with all spline characteristic objects per trafo/trafo3w
+- [CHANGED] power system test cases were reconverted from matpower data -> recent changes of `from_ppc()` are thus considered. These include: (1) capacitive branches between different voltage levels are converted as impedances instead of transformers; (2) slack generators are converted as `gen` elemenets instead of `ext_grid` elements; (3...) probably some more minor `from_ppc()` changes
 - [ADDED] step_dependency_table flag for shunt elements
 - [CHANGED] renamed tap_dependent_impedance flag to tap_dependency_table for trafo and trafo3w elements
 - [ADDED] id_characteristic_spline optional variable for shunt elements

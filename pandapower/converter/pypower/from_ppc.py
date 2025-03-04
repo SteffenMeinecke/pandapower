@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 ppc_elms = ["bus", "branch", "gen"]
 
 
-def from_ppc(ppc, f_hz=50, validate_conversion=False, **kwargs):
+def from_ppc(ppc, f_hz=50, validate_conversion=False, slack_as_gen=True, **kwargs):
     """
     This function converts pypower case files to pandapower net structure.
 
@@ -37,6 +37,9 @@ def from_ppc(ppc, f_hz=50, validate_conversion=False, **kwargs):
         **f_hz** (int) - The frequency of the network, by default 50
 
         **validate_conversion** (bool) - If True, validate_from_ppc is run after conversion. For running the validation, the ppc must already contain the pypower powerflow results or pypower must be installed, by default False
+
+        **slack_as_gen** (bool) - Whether the generator connected to the slack bus should be modeled
+        as gen (in case of False, an ext_grid is created.), by default True
 
         **kwargs** (dict) - keyword arguments for:
                             - tap_side
@@ -62,7 +65,7 @@ def from_ppc(ppc, f_hz=50, validate_conversion=False, **kwargs):
     net._from_ppc_lookups = dict()
 
     _from_ppc_bus(net, ppc)
-    net._from_ppc_lookups["gen"] = _from_ppc_gen(net, ppc)
+    net._from_ppc_lookups["gen"] = _from_ppc_gen(net, ppc, slack_as_gen)
     net._from_ppc_lookups["branch"] = _from_ppc_branch(net, ppc, f_hz, **kwargs)
     _from_ppc_gencost(net, ppc, net._from_ppc_lookups["gen"], check=kwargs.get("check_costs", True))
 
@@ -104,7 +107,7 @@ def _from_ppc_bus(net, ppc):
     # unused data from ppc: VM, VA (partwise: in ext_grid), BUS_AREA
 
 
-def _from_ppc_gen(net, ppc):
+def _from_ppc_gen(net, ppc, slack_as_gen):
     """ gen data -> create ext_grid, gen, sgen """
     n_gen = ppc["gen"].shape[0]
 
@@ -115,7 +118,7 @@ def _from_ppc_gen(net, ppc):
     bus_pos = _get_bus_pos(ppc, ppc["gen"][:, GEN_BUS])
 
     # determine which gen should considered as ext_grid, gen or sgen
-    is_ext_grid, is_gen, is_sgen = _gen_to_which(ppc, bus_pos=bus_pos)
+    is_ext_grid, is_pv_gen, is_sgen = _gen_to_which(ppc, bus_pos=bus_pos)
 
     # take VG of the last gen of each bus
     vg_bus_lookup = pd.DataFrame({"vg": ppc["gen"][:, VG], "bus": bus_pos})
@@ -124,16 +127,25 @@ def _from_ppc_gen(net, ppc):
 
     gen_name = ppc.get("gen_name", np.array([None]*n_gen))
 
-    # create ext_grid
+    # create ext_grid and prepare gen_slack
     idx_eg = list()
-    for i in np.arange(n_gen, dtype=np.int64)[is_ext_grid]:
-        idx_eg.append(create_ext_grid(
-            net, bus=net.bus.index[bus_pos[i]], vm_pu=vg_bus_lookup.at[bus_pos[i]],
-            va_degree=ppc['bus'][bus_pos[i], VA],
-            in_service=(ppc['gen'][i, GEN_STATUS] > 0).astype(bool),
-            max_p_mw=ppc['gen'][i, PMAX], min_p_mw=ppc['gen'][i, PMIN],
-            max_q_mvar=ppc['gen'][i, QMAX], min_q_mvar=ppc['gen'][i, QMIN],
-            name=gen_name[i]))
+    if not slack_as_gen:
+        for i in np.arange(n_gen, dtype=np.int64)[is_ext_grid]:
+            idx_eg.append(create_ext_grid(
+                net, bus=net.bus.index[bus_pos[i]], vm_pu=vg_bus_lookup.at[bus_pos[i]],
+                va_degree=ppc['bus'][bus_pos[i], VA],
+                in_service=(ppc['gen'][i, GEN_STATUS] > 0).astype(bool),
+                max_p_mw=ppc['gen'][i, PMAX], min_p_mw=ppc['gen'][i, PMIN],
+                max_q_mvar=ppc['gen'][i, QMAX], min_q_mvar=ppc['gen'][i, QMIN],
+                name=gen_name[i]))
+        is_gen = is_pv_gen
+        gen_slack = np.zeros(sum(is_gen), dtype=bool)
+    else:
+        is_gen = is_pv_gen | is_ext_grid
+        gen_slack = np.zeros(sum(is_gen), dtype=bool)
+        gen_slack[is_ext_grid[is_gen]] |= True
+        is_ext_grid &= False
+    idx_eg = np.array(idx_eg).astype(np.int64)
 
     # create gen
     idx_gen = create_gens(
@@ -142,7 +154,7 @@ def _from_ppc_gen(net, ppc):
         in_service=(ppc['gen'][is_gen, GEN_STATUS] > 0), controllable=True,
         max_p_mw=ppc['gen'][is_gen, PMAX], min_p_mw=ppc['gen'][is_gen, PMIN],
         max_q_mvar=ppc['gen'][is_gen, QMAX], min_q_mvar=ppc['gen'][is_gen, QMIN],
-        name=gen_name[is_gen])
+        name=gen_name[is_gen], slack=gen_slack)
 
     # create sgen
     idx_sgen = create_sgens(
@@ -310,7 +322,7 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
         sn = ppc['branch'][is_impedance, RATE_A]
         sn_is_zero = np.isclose(sn_mva, 0)
         if np.any(sn_is_zero):
-            sn[sn_is_zero] = MAX_VAL
+            sn[sn_is_zero] = baseMVA
             logger.debug("ppc branch rateA is zero for at least some impedances -> "
                          "baseMVA and rateA is ignored and MAXValue used for sn_mva.")
         # the impedances in ppc[branch] refer to the net.sn_mva and the impedances in net.impedance
@@ -333,15 +345,6 @@ def _from_ppc_branch(net, ppc, f_hz, **kwargs):
             x_asym_pu[~sn_is_zero] *= sn_mva[~sn_is_zero] / baseMVA
             b_asym_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
             g_asym_pu[~sn_is_zero] *= baseMVA / sn_mva[~sn_is_zero]
-        elif np.all(~sn_is_zero):
-            rft_pu *= sn_mva / baseMVA
-            xft_pu *= sn_mva / baseMVA
-            bf_pu *= baseMVA / sn_mva
-            gf_pu *= baseMVA / sn_mva
-            r_asym_pu *= sn_mva / baseMVA
-            x_asym_pu *= sn_mva / baseMVA
-            b_asym_pu *= baseMVA / sn_mva
-            g_asym_pu *= baseMVA / sn_mva
 
         # divide by 2 because in ppc[branch] it stands for the total Y of the branch,
         # and here we specify the "from" and "to" portions of Y separately

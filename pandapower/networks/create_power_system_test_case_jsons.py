@@ -11,7 +11,7 @@ from pandapower.auxiliary import LoadflowNotConverged
 from pandapower.file_io import to_json
 from pandapower.run import runpp
 import pandapower.networks as pn
-from pandapower.pypower.idx_brch import BR_R, BR_X
+from pandapower.pypower.idx_brch import BR_R, BR_X, BR_G
 try:
     import pandaplan.core.pplog as logging
 except ImportError:
@@ -98,7 +98,7 @@ iceland;50;2
         2: os.path.join(home, "Documents", "MATLAB", "further_mpc_data"),
     })
     table = pd.read_csv(StringIO(table_str), sep=";")
-    table = table.loc[table.name.isin(["case33bw"])]#, "case300", "case6470rte", "case6495rte", "case6515rte"])] # TODO for testing
+    # table = table.loc[table.name.isin(["case14"])]#, "case300", "case6470rte", "case6495rte", "case6515rte"])] # for testing
     return table, input_data_folders
 
 
@@ -218,6 +218,9 @@ def try_to_provide_pf_results(net, net_name):
         runpp(net, trafo_model="pi")
     except (LoadflowNotConverged, KeyError):
         logger.error(f"Power flow calculation of {net_name} did not converge.")
+    if n_not_zero := np.sum(~np.isclose(net._ppc["branch"][:, BR_G], 0)):
+        logger.error(f"{n_not_zero} branches have non-zero values in BR_G, although mpc/ppc does "
+                     "support that kind of value.")
 
 
 if __name__ == "__main__":
